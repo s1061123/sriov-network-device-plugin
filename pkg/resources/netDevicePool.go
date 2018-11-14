@@ -78,37 +78,5 @@ func (rp *netDevicePool) GetDeviceSpecs(deviceFiles map[string]string, deviceIDs
 
 // Probe returns 'true' if device health changes 'false' otherwise
 func (rp *netDevicePool) Probe(rc *types.ResourceConfig, devices map[string]*pluginapi.Device) bool {
-	// Network device should check link status for each physical port and update health status for
-	// all associated VFs if there is any
-	changed := false // this will be returned
-	healthValue := pluginapi.Healthy
-	for _, pf := range rc.RootDevices {
-		// If the PF link is not up = "Unhealthy"
-		if !utils.IsNetlinkStatusUp(pf) {
-			healthValue = pluginapi.Unhealthy
-		}
-
-		if rc.SriovMode {
-			// Get VFs associated with this device
-			if vfs, err := utils.GetVFList(pf); err == nil {
-				for _, vf := range vfs {
-					device := devices[vf]
-					if device.Health != healthValue {
-						device.Health = healthValue
-						changed = true
-					}
-				}
-			}
-
-		} else {
-			// device is the PF
-			device := devices[pf]
-			if device.Health != healthValue {
-				device.Health = healthValue
-				changed = true
-			}
-		}
-
-	}
-	return changed
+	return false
 }

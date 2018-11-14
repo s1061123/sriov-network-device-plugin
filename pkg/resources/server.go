@@ -23,7 +23,9 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/intel/sriov-network-device-plugin/pkg/types"
+	"github.com/vishvananda/netlink"
 	"golang.org/x/net/context"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	pluginapi "k8s.io/kubernetes/pkg/kubelet/apis/deviceplugin/v1beta1"
 )
@@ -36,6 +38,7 @@ type resourceServer struct {
 	termSignal         chan bool
 	updateSignal       chan bool
 	stopWatcher        chan bool
+	stopLinkWatcher    chan bool
 	checkIntervals     int // health check intervals in seconds
 }
 
@@ -190,6 +193,7 @@ func (rs *resourceServer) Start() error {
 	conn.Close()
 
 	rs.triggerUpdate()
+	rs.watchLinkStatus()
 
 	// Register with Kubelet.
 	err = rs.register()
@@ -212,6 +216,7 @@ func (rs *resourceServer) restart() error {
 	rs.grpcServer = nil
 	// Send terminate signal to ListAndWatch()
 	rs.termSignal <- true
+	rs.stopLinkWatcher <- true
 
 	rs.grpcServer = grpc.NewServer() // new instance of a grpc server
 	return rs.Start()
@@ -267,17 +272,33 @@ func (rs *resourceServer) cleanUp() error {
 	return nil
 }
 
-func (rs *resourceServer) triggerUpdate() {
-	rp := rs.resourcePool
-	if rs.checkIntervals > 0 {
-		go func() {
-			for {
-				changed := rp.Probe(rs.resourcePool.GetConfig(), rp.GetDevices())
-				if changed {
-					rs.updateSignal <- true
+func (rs *resourceServer) watchLinkStatus() {
+	go func() {
+		devices := rs.resourcePool.GetDevices()
+		ch := make(chan netlink.LinkUpdate)
+		done := make(chan struct{})
+		rs.stopLinkWatcher = make(chan bool)
+
+		err := netlink.LinkSubscribe(ch, done)
+		if err != nil {
+			return err
+		}
+
+		defer close(done)
+
+		for {
+			select {
+			case update := <-ch:
+				linkName := update.Link.Attrs().Name
+				for _, dev := range devices {
+					if dev == linkName {
+						devices = rs.resourcePool.GetDevices()
+						rs.updateSignal <- true
+					}
 				}
-				time.Sleep(time.Second * time.Duration(rs.checkIntervals))
+			case <-rs.stopLinkWatcher:
+				return
 			}
-		}()
-	}
+		}
+	}()
 }
